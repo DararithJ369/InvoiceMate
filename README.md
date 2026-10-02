@@ -1,4 +1,4 @@
-# <img src="https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExcHl0aWxlazRramp0a3Z5ZzI1bHIweXRrZDh0bDhvczF1dWg5YXpicCZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/QDjpIL6oNCVZ4qzGs7/giphy.gif" width="50"> [Dararith J.](https://github.com/DararithJ369/DararithJ369/) — InvoiceMate
+# InvoiceMate
 
 **Telegram AI Invoicing Bot for Cambodian SMEs & Freelancers**
 
