@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.pytest_cache/
+
+# Environment & Virtual environments
+.env
+.venv/
+
+# Database & Storage artifacts
+*.db
+*.db-*
+*.bak
+*.log
+storage/
+
+# OS metadata
+.DS_Store
+Thumbs.db
+
+# Internal spec files
+CLAUDE.md
+TASK.md
+prompts/

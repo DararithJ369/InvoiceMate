@@ -1,0 +1,44 @@
+[project]
+name = "invoicemate"
+version = "0.1.0"
+description = "Telegram AI Invoicing Bot for Cambodian SMEs & Freelancers"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "anthropic>=0.18.0",
+    "google-genai>=0.1.0",
+    "python-dotenv>=1.0.0",
+    "aiogram>=3.4.0",
+    "qrcode[pil]>=7.4.2",
+    "reportlab>=4.1.0",
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.28.0",
+    "khmernormalizer>=0.0.4",
+    "weasyprint>=70.0",
+    "fpdf2>=2.8.0",
+    "uharfbuzz>=0.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+hybrid = [
+    "transformers>=4.40.0",
+    "gliner>=0.2.0",
+    "khmer-nltk>=1.6",
+    "sentencepiece>=0.2.0",
+    "torch>=2.0.0",
+]
+
+[project.scripts]
+invoicemate-db = "main:main"
+invoicemate-bot = "invoicemate.bot.bot:run_bot"
+invoicemate-server = "invoicemate.api.server:run_server"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+pythonpath = ["src"]
