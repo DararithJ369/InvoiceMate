@@ -1,7 +1,7 @@
 from datetime import datetime, date
 from decimal import Decimal
-from typing import List, Optional, TYPE_CHECKING
-from sqlalchemy import String, Numeric, DateTime, Date, ForeignKey, Text, Integer, Index, UniqueConstraint, func
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
+from sqlalchemy import String, Numeric, DateTime, Date, ForeignKey, Text, Integer, Index, UniqueConstraint, func, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from invoicemate.models.base import Base
@@ -36,7 +36,19 @@ class Invoice(Base):
         String(20), default=InvoiceStatus.SENT.value, nullable=False, index=True
     )
     payment_reference: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payment_method: Mapped[Optional[str]] = mapped_column(
+        String(50), nullable=True, default="BAKONG_KHQR"
+    )
+    khqr_md5: Mapped[Optional[str]] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    bank_transaction_ref: Mapped[Optional[str]] = mapped_column(
+        String(100), nullable=True, index=True
+    )
+    payment_metadata: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSON, nullable=True
+    )
     pdf_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     pdf_status: Mapped[str] = mapped_column(
         String(20), default=PdfStatus.PENDING.value, nullable=False

@@ -307,6 +307,14 @@ def confirm_invoice(
             except Exception:
                 due_date_obj = None
 
+    from invoicemate.services.khqr_generator import calculate_khqr_md5, generate_khqr_string
+    khqr_str = generate_khqr_string(
+        amount=total,
+        currency=curr,
+        bill_number=invoice_number,
+    )
+    khqr_md5 = calculate_khqr_md5(khqr_str)
+
     # 2. Create final committed Invoice record
     invoice = Invoice(
         org_id=effective_org,
@@ -318,6 +326,8 @@ def confirm_invoice(
         currency=curr,
         due_date=due_date_obj,
         status=InvoiceStatus.SENT.value,
+        payment_method="BAKONG_KHQR",
+        khqr_md5=khqr_md5,
         pdf_status=PdfStatus.PENDING.value,
     )
     db.add(invoice)
@@ -410,9 +420,18 @@ def confirm_invoice(
     return invoice
 
 
-def mark_as_paid(db: Session, invoice_id: int, org_id: Optional[int] = None) -> Invoice:
+def mark_as_paid(
+    db: Session,
+    invoice_id: int,
+    org_id: Optional[int] = None,
+    bank_transaction_ref: Optional[str] = None,
+    payment_method: Optional[str] = None,
+    payment_metadata: Optional[Dict[str, Any]] = None,
+    paid_at: Optional[datetime] = None,
+) -> Invoice:
     """
     Mark invoice as paid strictly within org_id.
+    Persists bank transaction reference, payment method, metadata, and timestamps.
     """
     invoice = db.get(Invoice, invoice_id)
     if not invoice or (org_id is not None and invoice.org_id != org_id):
@@ -422,13 +441,28 @@ def mark_as_paid(db: Session, invoice_id: int, org_id: Optional[int] = None) -> 
         raise ValueError(f"Cannot mark cancelled invoice {invoice.invoice_number} as paid")
 
     invoice.status = InvoiceStatus.PAID.value
-    invoice.paid_at = datetime.now(timezone.utc)
+    invoice.paid_at = paid_at or datetime.now(timezone.utc)
+    if bank_transaction_ref:
+        invoice.bank_transaction_ref = bank_transaction_ref
+    if payment_method:
+        invoice.payment_method = payment_method
+    elif not invoice.payment_method:
+        invoice.payment_method = "BAKONG_KHQR"
+    if payment_metadata:
+        invoice.payment_metadata = payment_metadata
+
+    event_detail: Dict[str, Any] = {
+        "paid_at": invoice.paid_at.isoformat(),
+        "payment_method": invoice.payment_method,
+    }
+    if invoice.bank_transaction_ref:
+        event_detail["bank_transaction_ref"] = invoice.bank_transaction_ref
 
     db.add(
         InvoiceEvent(
             invoice_id=invoice.id,
             event_type=EventType.MARKED_PAID.value,
-            detail={"paid_at": invoice.paid_at.isoformat()},
+            detail=event_detail,
         )
     )
 

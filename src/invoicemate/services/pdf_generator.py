@@ -8,7 +8,12 @@ from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 
 from invoicemate.models.invoice import Invoice
-from invoicemate.services.khqr_generator import generate_khqr_string, generate_khqr_image
+from invoicemate.services.khqr_generator import (
+    generate_khqr_string,
+    generate_khqr_image,
+    generate_dynamic_khqr,
+    calculate_khqr_md5,
+)
 from invoicemate.services.exchange_rate_service import ExchangeRateResult, get_gdt_fallback_rate
 
 
@@ -65,13 +70,16 @@ def render_invoice_pdf_bytes(
 
     khr_total = rate_info.to_khr(invoice.total) if invoice.currency == "USD" else invoice.total
 
-    # 1. Generate KHQR String & In-memory / temp image
-    khqr_str = generate_khqr_string(
+    # 1. Generate Dynamic KHQR String & In-memory / temp image
+    khqr_str, khqr_md5 = generate_dynamic_khqr(
         merchant_name=merchant_name,
         amount=invoice.total,
         currency=invoice.currency,
         bill_number=invoice.invoice_number,
     )
+    invoice.khqr_md5 = khqr_md5
+    invoice.payment_method = "BAKONG_KHQR"
+
     qr_img_dir = "./storage/invoices/qr"
     os.makedirs(qr_img_dir, exist_ok=True)
     qr_img_path = os.path.join(qr_img_dir, f"{invoice.invoice_number}_qr.png")

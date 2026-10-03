@@ -1,8 +1,9 @@
+import hashlib
 import io
 import os
 import qrcode
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, Tuple
 
 from invoicemate.core.config import settings
 
@@ -77,6 +78,37 @@ def generate_khqr_string(
 
     checksum = _crc16_ccitt(payload)
     return payload + checksum
+
+
+def calculate_khqr_md5(khqr_string: str) -> str:
+    """
+    Calculate MD5 hash of the KHQR string.
+    Compliant with Bakong Open API payment settlement hash tracking.
+    """
+    return hashlib.md5(khqr_string.encode("utf-8")).hexdigest()
+
+
+def generate_dynamic_khqr(
+    merchant_name: str = "InvoiceMate Merchant",
+    amount: Optional[Decimal] = None,
+    currency: str = "USD",
+    bill_number: Optional[str] = None,
+    bakong_account_id: Optional[str] = None,
+) -> Tuple[str, str]:
+    """
+    Generate NBC-compliant Dynamic KHQR payload incorporating bakong_id, amount,
+    currency (USD/KHR), merchant_name, and bill_number.
+    Returns tuple: (khqr_string, khqr_md5)
+    """
+    khqr_str = generate_khqr_string(
+        merchant_name=merchant_name,
+        bakong_account_id=bakong_account_id,
+        amount=amount,
+        currency=currency,
+        bill_number=bill_number,
+    )
+    khqr_md5 = calculate_khqr_md5(khqr_str)
+    return khqr_str, khqr_md5
 
 
 def generate_khqr_image(

@@ -47,9 +47,20 @@ from invoicemate.services.exchange_rate_service import (
     ExchangeRateResult,
 )
 from invoicemate.services.llm_extractor import extract_intent
-from invoicemate.services.khqr_generator import generate_khqr_string, generate_khqr_image
+from invoicemate.services.khqr_generator import (
+    generate_khqr_string,
+    generate_khqr_image,
+    generate_dynamic_khqr,
+    calculate_khqr_md5,
+)
 from invoicemate.services.pdf_generator import generate_invoice_pdf, render_invoice_pdf_bytes
 from invoicemate.services.seeder import seed_database
+from invoicemate.services.bakong_webhook_service import (
+    verify_webhook_signature,
+    process_bakong_webhook_payment,
+    format_merchant_payment_alert_card,
+    send_merchant_payment_alert,
+)
 
 __all__ = [
     "calculate_line_total",
@@ -91,7 +102,13 @@ __all__ = [
     "extract_intent",
     "generate_khqr_string",
     "generate_khqr_image",
+    "generate_dynamic_khqr",
+    "calculate_khqr_md5",
     "generate_invoice_pdf",
     "render_invoice_pdf_bytes",
     "seed_database",
+    "verify_webhook_signature",
+    "process_bakong_webhook_payment",
+    "format_merchant_payment_alert_card",
+    "send_merchant_payment_alert",
 ]

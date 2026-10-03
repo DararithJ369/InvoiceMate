@@ -1,11 +1,17 @@
 import os
 import uvicorn
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Depends
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 from invoicemate.core.config import settings
 from invoicemate.db import init_db, SessionLocal
 from invoicemate.services.invoice_engine import get_invoice_history, get_invoice_by_number
+from invoicemate.services.bakong_webhook_service import (
+    verify_webhook_signature,
+    process_bakong_webhook_payment,
+    send_merchant_payment_alert,
+)
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -119,6 +125,64 @@ def get_invoice_api(invoice_number: str, org_id: int = 1):
             ],
             "created_at": inv.created_at.isoformat(),
         }
+
+
+def get_db():
+    """Database session dependency for FastAPI routes."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+@app.post("/api/v1/webhooks/bakong")
+@app.post("/webhooks/bakong")
+async def handle_bakong_payment_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """
+    Bakong Open API payment settlement webhook listener:
+    1. Validates HMAC-SHA256 signature / Bearer token security.
+    2. Enforces idempotency via bank transaction reference / hash.
+    3. Matches incoming bill_number or md5 hash against pending invoices.
+    4. Atomically transitions invoice state to PAID and logs audit event.
+    5. Dispatches asynchronous Telegram payment receipt card to the merchant.
+    """
+    raw_body = await request.body()
+    headers_dict = dict(request.headers)
+
+    # 1. Signature validation
+    if not verify_webhook_signature(raw_body=raw_body, headers=headers_dict, secret=settings.BAKONG_WEBHOOK_SECRET):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or unauthorized Bakong webhook signature.",
+        )
+
+    # 2. Parse JSON payload
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Malformed JSON in webhook request body.")
+
+    # 3. Process payment reconciliation
+    result, invoice = process_bakong_webhook_payment(db=db, payload=payload)
+
+    if result.get("status") == "not_found":
+        raise HTTPException(status_code=404, detail=result.get("message"))
+
+    # 4. Trigger async merchant notification upon success
+    if result.get("status") == "success" and invoice:
+        background_tasks.add_task(
+            send_merchant_payment_alert,
+            invoice_id=invoice.id,
+            bank_ref=invoice.bank_transaction_ref,
+            paid_at=invoice.paid_at,
+        )
+
+    return JSONResponse(status_code=200, content=result)
 
 
 def run_server():

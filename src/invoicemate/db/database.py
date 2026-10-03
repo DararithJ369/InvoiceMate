@@ -56,3 +56,18 @@ def init_db(bind_engine=None) -> None:
             except Exception:
                 pass
 
+            try:
+                res = conn.execute(text("PRAGMA table_info(invoices)")).fetchall()
+                col_names = [r[1] for r in res]
+                if "payment_method" not in col_names:
+                    conn.execute(text("ALTER TABLE invoices ADD COLUMN payment_method VARCHAR(50) DEFAULT 'BAKONG_KHQR'"))
+                if "khqr_md5" not in col_names:
+                    conn.execute(text("ALTER TABLE invoices ADD COLUMN khqr_md5 VARCHAR(64)"))
+                if "bank_transaction_ref" not in col_names:
+                    conn.execute(text("ALTER TABLE invoices ADD COLUMN bank_transaction_ref VARCHAR(100)"))
+                if "payment_metadata" not in col_names:
+                    conn.execute(text("ALTER TABLE invoices ADD COLUMN payment_metadata JSON"))
+                conn.commit()
+            except Exception:
+                pass
+

@@ -13,14 +13,14 @@ InvoiceMate is a chat-native invoicing assistant. Businesses create, update, and
 ```text
 InvoiceMate/
 ├── src/invoicemate/
-│   ├── api/          # FastAPI PDF download service
+│   ├── api/          # FastAPI PDF & Bakong payment webhook service
 │   ├── bot/          # Telegram bot handlers & rate limiter
 │   ├── core/         # App configuration & settings
 │   ├── db/           # SQLite WAL database & session lifecycle
 │   ├── models/       # Multi-tenant ORM models
 │   ├── schemas/      # Pydantic validation schemas
 │   └── services/     # Tax calculator, KHQR generator, PDF renderer & NLP
-├── tests/            # Automated test suite (60 unit tests)
+├── tests/            # Automated test suite (68 unit tests)
 ├── scripts/          # Demos & utility scripts
 └── main.py           # Database initialization & seeding CLI
 ```
@@ -50,6 +50,7 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token_from_botfather
 GEMINI_API_KEY=your_google_gemini_api_key
 LLM_PROVIDER=gemini
 BAKONG_ACCOUNT_ID=your_username@aba
+BAKONG_WEBHOOK_SECRET=your_bakong_webhook_secret
 BASE_URL=http://localhost:8000
 ```
 
@@ -110,6 +111,16 @@ uv run python -m invoicemate.bot.bot
 
 - **NBC Official Daily Exchange Rate**: Real-time integration with NBC API (hard timeout: 2000 ms), with graceful fallback to official General Department of Taxation (GDT) fallback rate (4,085 KHR/USD).
 - **Dual-Currency Billing**: Subtotal, VAT (10%), PLT (5%), Accommodation Tax (2%), and Total display in both USD and KHR.
+
+---
+
+## Automated Bakong KHQR Payment Webhook
+
+- **Endpoint:** `POST /api/v1/webhooks/bakong`
+- **Security:** HMAC-SHA256 signature validation (`X-Bakong-Signature`) & Bearer token support.
+- **Idempotency:** Automatic deduplication using bank transaction hash (`bank_ref`).
+- **Zero-Touch Reconciliation:** Transitions invoice state from `SENT` → `PAID` upon settlement.
+- **Instant Merchant Alert:** Asynchronously pushes an instant payment receipt card to the merchant on Telegram.
 
 ---
 

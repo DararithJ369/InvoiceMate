@@ -21,6 +21,8 @@ GIF_URLS = {
     "clear": "https://media.giphy.com/media/d7Zv95YKA28s1yrqqX/giphy.gif",
 }
 
+PAID_GIF_URL = GIF_URLS["paid"]
+
 
 def get_animation_target(key: str) -> Union[FSInputFile, str]:
     """Return local FSInputFile if file exists, else direct fallback URL."""
