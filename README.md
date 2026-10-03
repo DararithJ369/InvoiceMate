@@ -107,13 +107,6 @@ uv run python -m invoicemate.bot.bot
 
 ---
 
-## Cambodian Fiscal Compliance (Prakas 723)
-
-- **NBC Official Daily Exchange Rate**: Real-time integration with NBC API (hard timeout: 2000 ms), with graceful fallback to official General Department of Taxation (GDT) fallback rate (4,085 KHR/USD).
-- **Dual-Currency Billing**: Subtotal, VAT (10%), PLT (5%), Accommodation Tax (2%), and Total display in both USD and KHR.
-
----
-
 ## Automated Bakong KHQR Payment Webhook
 
 - **Endpoint:** `POST /api/v1/webhooks/bakong`
