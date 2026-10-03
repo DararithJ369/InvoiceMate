@@ -328,3 +328,92 @@ async def send_merchant_payment_alert(
         return False
     finally:
         await bot.session.close()
+
+
+def inquire_bakong_transaction_by_md5(
+    khqr_md5: str,
+    api_token: Optional[str] = None,
+    timeout_seconds: float = 3.0,
+) -> Optional[Dict[str, Any]]:
+    """
+    Query Bakong Open API check_transaction_by_md5 endpoint.
+    Returns transaction settlement dictionary if paid/settled, else None.
+    """
+    token = api_token if api_token is not None else settings.BAKONG_API_TOKEN
+    if not token:
+        logger.debug("No BAKONG_API_TOKEN configured; skipping remote inquiry.")
+        return None
+
+    import httpx
+
+    url = f"{settings.BAKONG_API_URL}/check_transaction_by_md5"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    payload = {"md5": khqr_md5}
+
+    try:
+        with httpx.Client(timeout=timeout_seconds) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("responseCode") == 0 and "data" in data:
+                    return data["data"]
+            logger.debug(f"Bakong inquiry response: {resp.status_code} {resp.text}")
+    except Exception as err:
+        logger.warning(f"Error querying Bakong check_transaction_by_md5 for {khqr_md5}: {err}")
+
+    return None
+
+
+def reconcile_invoice_by_inquiry(
+    db: Session,
+    invoice_id: int,
+    mock_settled_payload: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Invoice]:
+    """
+    Active pull fallback: checks transaction settlement in Bakong for an invoice.
+    Returns status: ('settled' | 'already_paid' | 'pending'), and Invoice.
+    """
+    invoice = db.get(Invoice, invoice_id)
+    if not invoice:
+        raise ValueError(f"Invoice with id {invoice_id} not found")
+
+    if invoice.status == InvoiceStatus.PAID.value:
+        return "already_paid", invoice
+
+    # Ensure khqr_md5 exists
+    if not invoice.khqr_md5:
+        from invoicemate.services.khqr_generator import generate_khqr_string, calculate_khqr_md5
+        khqr = generate_khqr_string(
+            amount=invoice.total,
+            currency=invoice.currency,
+            bill_number=invoice.invoice_number,
+        )
+        invoice.khqr_md5 = calculate_khqr_md5(khqr)
+        db.commit()
+        db.refresh(invoice)
+
+    # Inquire settlement status
+    tx_data = mock_settled_payload or inquire_bakong_transaction_by_md5(invoice.khqr_md5)
+
+    if tx_data:
+        bank_ref = (
+            tx_data.get("externalTransactionId")
+            or tx_data.get("external_transaction_id")
+            or tx_data.get("bank_ref")
+            or tx_data.get("hash")
+            or f"BK-INQ-{int(datetime.now().timestamp())}"
+        )
+        paid_inv = mark_as_paid(
+            db=db,
+            invoice_id=invoice.id,
+            org_id=invoice.org_id,
+            bank_transaction_ref=str(bank_ref),
+            payment_method="BAKONG_KHQR",
+            payment_metadata=tx_data,
+        )
+        return "settled", paid_inv
+
+    return "pending", invoice

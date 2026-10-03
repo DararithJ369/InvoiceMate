@@ -373,7 +373,7 @@ def process_callback_query(
                 "message": f"Selected customer: {cust.name}",
             }
 
-    elif action_prefix in ["mark_paid"] and target_id:
+    elif action_prefix in ["mark_paid", "cb_mark_paid"] and target_id:
         paid_inv = mark_as_paid(db, invoice_id=target_id, org_id=org_id)
         return {
             "action": "marked_paid",
@@ -381,5 +381,27 @@ def process_callback_query(
             "invoice": paid_inv,
             "message": f"Invoice #{paid_inv.invoice_number} marked as PAID.",
         }
+
+    elif action_prefix in ["cb_check_payment", "check_payment"] and target_id:
+        from invoicemate.services.bakong_webhook_service import reconcile_invoice_by_inquiry
+        status, inv = reconcile_invoice_by_inquiry(db, invoice_id=target_id)
+        if status == "settled":
+            return {
+                "action": "payment_inquiry_settled",
+                "invoice": inv,
+                "message": f"Payment for invoice #{inv.invoice_number} verified via Bakong!",
+            }
+        elif status == "already_paid":
+            return {
+                "action": "payment_inquiry_already_paid",
+                "invoice": inv,
+                "message": f"Invoice #{inv.invoice_number} is already paid.",
+            }
+        else:
+            return {
+                "action": "payment_inquiry_pending",
+                "invoice": inv,
+                "message": f"Payment for invoice #{inv.invoice_number} is still pending. Customer has not completed the transfer yet.",
+            }
 
     return {"action": "unhandled", "data": callback_data}

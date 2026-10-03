@@ -19,6 +19,8 @@ class Settings(BaseModel):
 
     BAKONG_ACCOUNT_ID: str = os.getenv("BAKONG_ACCOUNT_ID", "invoicemate@bakong")
     BAKONG_WEBHOOK_SECRET: str = os.getenv("BAKONG_WEBHOOK_SECRET", "")
+    BAKONG_API_URL: str = os.getenv("BAKONG_API_URL", "https://api-bakong.nbc.gov.kh/v1").rstrip("/")
+    BAKONG_API_TOKEN: str = os.getenv("BAKONG_API_TOKEN", "")
     DEFAULT_CURRENCY: str = os.getenv("DEFAULT_CURRENCY", "USD")
     INVOICE_PREFIX: str = os.getenv("INVOICE_PREFIX", "INV-")
     INVOICE_PADDING: int = int(os.getenv("INVOICE_PADDING", "6"))

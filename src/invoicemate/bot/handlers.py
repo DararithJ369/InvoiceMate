@@ -19,7 +19,7 @@ from invoicemate.services.invoice_engine import (
     mark_as_paid,
     cancel_draft,
 )
-from invoicemate.bot.card_formatter import format_invoice_card, get_draft_keyboard
+from invoicemate.bot.card_formatter import format_invoice_card, get_draft_keyboard, get_issued_invoice_keyboard
 from invoicemate.bot.gifs import send_event_gif
 
 logger = logging.getLogger(__name__)
@@ -326,11 +326,7 @@ async def handle_natural_language_message(message: Message):
             inv = res["invoice"]
             await send_event_gif(message, "success")
             card_text = format_invoice_card(inv, title="វិក្កយបត្រចេញរួចរាល់ / INVOICE ISSUED")
-            paid_kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="បានបង់ប្រាក់ / Mark as Paid", callback_data=f"mark_paid:{inv.id}")]
-                ]
-            )
+            paid_kb = get_issued_invoice_keyboard(inv.id, inv.status)
             await message.answer(card_text, reply_markup=paid_kb, parse_mode="HTML")
 
             local_path = os.path.join(settings.STORAGE_DIR, f"{inv.invoice_number}.pdf")
@@ -405,11 +401,7 @@ async def handle_confirm_draft_cb(callback: CallbackQuery):
             inv = res["invoice"]
             await send_event_gif(callback.message, "success")
             card_text = format_invoice_card(inv, title="វិក្កយបត្រចេញរួចរាល់ / INVOICE ISSUED")
-            paid_kb = InlineKeyboardMarkup(
-                inline_keyboard=[
-                    [InlineKeyboardButton(text="បានបង់ប្រាក់ / Mark as Paid", callback_data=f"mark_paid:{inv.id}")]
-                ]
-            )
+            paid_kb = get_issued_invoice_keyboard(inv.id, inv.status)
             await callback.message.edit_text(card_text, reply_markup=paid_kb, parse_mode="HTML")
             await callback.answer("Invoice confirmed!")
 
@@ -439,7 +431,34 @@ async def handle_cancel_draft_cb(callback: CallbackQuery):
         await callback.answer("Draft cancelled.")
 
 
-@router.callback_query(F.data.startswith("mark_paid:"))
+@router.callback_query(F.data.startswith("cb_check_payment:") | F.data.startswith("check_payment:"))
+async def handle_check_payment_cb(callback: CallbackQuery):
+    with SessionLocal() as db:
+        org_id = _get_org_for_user(db, callback.from_user)
+        chat_id = str(callback.message.chat.id)
+        res = process_callback_query(db, org_id=org_id, chat_id=chat_id, callback_data=callback.data)
+        action = res.get("action")
+        inv = res.get("invoice")
+
+        if action == "payment_inquiry_settled":
+            await send_event_gif(callback.message, "paid", caption=f"Invoice <b>{inv.invoice_number}</b> marked as <b>PAID</b> via Bakong!")
+            card_text = format_invoice_card(inv, title="វិក្កយបត្របានទូទាត់រួច / INVOICE PAID")
+            paid_kb = get_issued_invoice_keyboard(inv.id, "paid")
+            await callback.message.edit_text(card_text, reply_markup=paid_kb, parse_mode="HTML")
+            await callback.answer("✅ ការទូទាត់ត្រូវបានបញ្ជាក់ជោគជ័យ! / Payment verified via Bakong!", show_alert=True)
+        elif action == "payment_inquiry_already_paid":
+            card_text = format_invoice_card(inv, title="វិក្កយបត្របានទូទាត់រួច / INVOICE PAID")
+            paid_kb = get_issued_invoice_keyboard(inv.id, "paid")
+            await callback.message.edit_text(card_text, reply_markup=paid_kb, parse_mode="HTML")
+            await callback.answer("វិក្កយបត្រនេះបានបង់រួចហើយ / Invoice already marked as PAID.")
+        else:
+            await callback.answer(
+                "⏳ មិនទាន់ទទួលបានការទូទាត់ទេ / Payment not yet detected. The customer has not completed the payment in their banking app yet.",
+                show_alert=True,
+            )
+
+
+@router.callback_query(F.data.startswith("mark_paid:") | F.data.startswith("cb_mark_paid:"))
 async def handle_mark_paid_cb(callback: CallbackQuery):
     with SessionLocal() as db:
         org_id = _get_org_for_user(db, callback.from_user)
@@ -449,7 +468,8 @@ async def handle_mark_paid_cb(callback: CallbackQuery):
             inv = res["invoice"]
             await send_event_gif(callback.message, "paid", caption=f"Invoice <b>{inv.invoice_number}</b> marked as <b>PAID</b>!")
             card_text = format_invoice_card(inv, title="វិក្កយបត្របានទូទាត់រួច / INVOICE PAID")
-            await callback.message.edit_text(card_text, parse_mode="HTML")
+            paid_kb = get_issued_invoice_keyboard(inv.id, "paid")
+            await callback.message.edit_text(card_text, reply_markup=paid_kb, parse_mode="HTML")
             await callback.answer("Marked as PAID!")
         else:
             await callback.answer("Update failed.")

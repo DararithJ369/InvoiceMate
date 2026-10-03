@@ -60,6 +60,8 @@ from invoicemate.services.bakong_webhook_service import (
     process_bakong_webhook_payment,
     format_merchant_payment_alert_card,
     send_merchant_payment_alert,
+    inquire_bakong_transaction_by_md5,
+    reconcile_invoice_by_inquiry,
 )
 
 __all__ = [
@@ -111,4 +113,6 @@ __all__ = [
     "process_bakong_webhook_payment",
     "format_merchant_payment_alert_card",
     "send_merchant_payment_alert",
+    "inquire_bakong_transaction_by_md5",
+    "reconcile_invoice_by_inquiry",
 ]

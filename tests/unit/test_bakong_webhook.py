@@ -340,3 +340,86 @@ async def test_send_merchant_payment_alert_mock(monkeypatch):
         # Even if invoice doesn't exist, function handles it safely
         success = await send_merchant_payment_alert(invoice_id=999999)
         assert success is False
+
+
+def test_reconcile_invoice_by_inquiry_settled(db_session):
+    """
+    Test Bakong Open API inquiry fallback:
+    Reconciles an invoice when transaction is detected via pull inquiry.
+    """
+    from invoicemate.services.bakong_webhook_service import reconcile_invoice_by_inquiry
+
+    org = create_org(db_session, telegram_user_id="tg_user_inquiry_test")
+    invoice = Invoice(
+        org_id=org.id,
+        invoice_number="INV-INQ-001",
+        subtotal=Decimal("50.00"),
+        tax=Decimal("0.00"),
+        total=Decimal("50.00"),
+        currency="USD",
+        status=InvoiceStatus.SENT.value,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    # Simulate inquiry returning settlement data
+    mock_payload = {
+        "externalTransactionId": "FT260999INQ",
+        "amount": 50.0,
+        "currency": "USD",
+        "hash": "tx_hash_123",
+    }
+
+    status, inv = reconcile_invoice_by_inquiry(db_session, invoice_id=invoice.id, mock_settled_payload=mock_payload)
+    assert status == "settled"
+    assert inv.status == InvoiceStatus.PAID.value
+    assert inv.bank_transaction_ref == "FT260999INQ"
+
+    # Second call returns already_paid
+    status2, inv2 = reconcile_invoice_by_inquiry(db_session, invoice_id=invoice.id)
+    assert status2 == "already_paid"
+
+
+def test_reconcile_invoice_by_inquiry_pending(db_session):
+    """
+    Test when Bakong inquiry reports transaction not found / pending.
+    """
+    from invoicemate.services.bakong_webhook_service import reconcile_invoice_by_inquiry
+
+    org = create_org(db_session, telegram_user_id="tg_user_inquiry_pending")
+    invoice = Invoice(
+        org_id=org.id,
+        invoice_number="INV-INQ-PENDING",
+        subtotal=Decimal("30.00"),
+        tax=Decimal("0.00"),
+        total=Decimal("30.00"),
+        currency="USD",
+        status=InvoiceStatus.SENT.value,
+    )
+    db_session.add(invoice)
+    db_session.commit()
+
+    status, inv = reconcile_invoice_by_inquiry(db_session, invoice_id=invoice.id)
+    assert status == "pending"
+    assert inv.status == InvoiceStatus.SENT.value
+
+
+def test_get_issued_invoice_keyboard_buttons():
+    """
+    Verify get_issued_invoice_keyboard contains both Check Payment and Mark Paid buttons,
+    and changes to Paid state once settled.
+    """
+    from invoicemate.bot.card_formatter import get_issued_invoice_keyboard
+
+    kb_sent = get_issued_invoice_keyboard(invoice_id=42, status="sent")
+    buttons_text = [btn.text for row in kb_sent.inline_keyboard for btn in row]
+    callbacks = [btn.callback_data for row in kb_sent.inline_keyboard for btn in row]
+
+    assert any("Check Payment" in t for t in buttons_text)
+    assert any("Mark as Paid" in t for t in buttons_text)
+    assert "cb_check_payment:42" in callbacks
+    assert "mark_paid:42" in callbacks
+
+    kb_paid = get_issued_invoice_keyboard(invoice_id=42, status="paid")
+    paid_buttons = [btn.text for row in kb_paid.inline_keyboard for btn in row]
+    assert any("Paid" in t for t in paid_buttons)

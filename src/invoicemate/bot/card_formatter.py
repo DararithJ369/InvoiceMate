@@ -129,3 +129,39 @@ def get_draft_keyboard(draft_id: int) -> InlineKeyboardMarkup:
         ]
     )
     return keyboard
+
+
+def get_issued_invoice_keyboard(invoice_id: int, status: str = "sent") -> InlineKeyboardMarkup:
+    """
+    Generate inline keyboard buttons for an issued invoice:
+    - [🔄 ពិនិត្យការទូទាត់ / Check Payment]: Live query Bakong Open API
+    - [🟢 កត់សម្គាល់ថាបានបង់ / Mark as Paid]: Manual toggle
+    """
+    if status == "paid":
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ បានបង់ប្រាក់រួចរាល់ / Paid",
+                        callback_data="cb_noop",
+                    )
+                ]
+            ]
+        )
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔄 ពិនិត្យការទូទាត់ / Check Payment",
+                    callback_data=f"cb_check_payment:{invoice_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🟢 កត់សម្គាល់ថាបានបង់ / Mark as Paid",
+                    callback_data=f"mark_paid:{invoice_id}",
+                ),
+            ],
+        ]
+    )
