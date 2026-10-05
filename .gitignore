@@ -17,6 +17,7 @@ wheels/
 *.bak
 *.log
 storage/
+models/
 
 # OS metadata
 .DS_Store

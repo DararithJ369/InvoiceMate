@@ -133,3 +133,18 @@ def test_interaction_logging_to_dataset(tmp_path):
     assert record["confidence"] >= 0.75
     assert record["customer_name"] == "Sokha"
     assert record["language"] == "mixed"
+
+
+def test_fine_tuned_neural_classification():
+    """Verify inference through the fine-tuned XLM-RoBERTa intent classifier."""
+    neural_res = HybridNLPExtractor.classify_intent_neural("invoice Sokha 2 monitors at $450 each")
+    assert neural_res is not None
+    intent, score = neural_res
+    assert intent == IntentEnum.CREATE_DRAFT
+    assert score >= 0.70
+
+    # Test Khmer phrasing inference
+    khmer_update = HybridNLPExtractor.classify_intent("កែប្រែចំនួន monitor ជា 3 គ្រឿង")
+    assert khmer_update[0] == IntentEnum.UPDATE_DRAFT
+    assert khmer_update[1] >= 0.70
+

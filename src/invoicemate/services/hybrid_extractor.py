@@ -44,6 +44,19 @@ INTENT_CANDIDATES = {
     ],
 }
 
+LABEL_TO_INTENT = {
+    "create_draft": IntentEnum.CREATE_DRAFT,
+    "update_draft": IntentEnum.UPDATE_DRAFT,
+    "confirm": IntentEnum.CONFIRM,
+    "cancel": IntentEnum.CANCEL,
+    "search": IntentEnum.SEARCH,
+    "select_customer": IntentEnum.SELECT_CUSTOMER,
+    "clarify_needed": IntentEnum.CLARIFY_NEEDED,
+    "greeting": IntentEnum.GREETING,
+    "thanks": IntentEnum.THANKS,
+    "help": IntentEnum.HELP,
+}
+
 
 def detect_language(text: str) -> str:
     """Detect whether text is Khmer ('km'), English ('en'), or code-switched ('mixed')."""
@@ -102,6 +115,54 @@ class HybridNLPExtractor:
 
     _gliner_model = None
     _classifier_pipeline = None
+    _intent_model = None
+    _intent_tokenizer = None
+
+    @classmethod
+    def get_intent_classifier(cls):
+        """Lazy load fine-tuned XLM-RoBERTa intent classifier if weights exist on disk."""
+        if cls._intent_model is None:
+            model_path = os.getenv("INTENT_MODEL_PATH", "models/intent_classifier")
+            if os.path.exists(model_path) and (
+                os.path.exists(os.path.join(model_path, "model.safetensors"))
+                or os.path.exists(os.path.join(model_path, "pytorch_model.bin"))
+            ):
+                try:
+                    import torch
+                    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+                    cls._intent_tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    cls._intent_model = AutoModelForSequenceClassification.from_pretrained(model_path)
+                    cls._intent_model.eval()
+                    logger.info(f"Loaded fine-tuned intent classifier from {model_path}")
+                except Exception as e:
+                    logger.warning(f"Could not load fine-tuned intent classifier from {model_path}: {e}")
+                    cls._intent_model = False
+            else:
+                cls._intent_model = False
+        return (cls._intent_model, cls._intent_tokenizer) if cls._intent_model is not False else (None, None)
+
+    @classmethod
+    def classify_intent_neural(cls, text: str) -> Optional[Tuple[IntentEnum, float]]:
+        """Run text through fine-tuned XLM-RoBERTa model if loaded."""
+        model, tokenizer = cls.get_intent_classifier()
+        if not model or not tokenizer:
+            return None
+        try:
+            import torch
+            segmented = segment_khmer_text(text)
+            inputs = tokenizer(segmented, return_tensors="pt", truncation=True, max_length=128)
+            with torch.no_grad():
+                logits = model(**inputs).logits
+                probs = torch.softmax(logits, dim=-1)[0]
+                top_idx = torch.argmax(probs).item()
+                confidence = float(probs[top_idx].item())
+                label = model.config.id2label.get(top_idx)
+                if label and label in LABEL_TO_INTENT:
+                    return LABEL_TO_INTENT[label], round(confidence, 2)
+        except Exception as e:
+            logger.warning(f"Neural intent classification error: {e}")
+        return None
 
     @classmethod
     def get_gliner(cls):
@@ -123,7 +184,7 @@ class HybridNLPExtractor:
     def classify_intent(cls, text: str, current_draft: Optional[Dict[str, Any]] = None) -> Tuple[IntentEnum, float]:
         """
         Model 1: Intent Classification with confidence score.
-        Evaluates contextual keywords, Khmer phrasing, and draft state.
+        Combines deterministic regex guards, draft context, and fine-tuned XLM-RoBERTa neural inference.
         """
         cleaned = text.strip().lower()
 
@@ -164,16 +225,16 @@ class HybridNLPExtractor:
                 if itm_name and (itm_name in cleaned or any(len(w) > 3 and w in cleaned for w in itm_name.split())):
                     return IntentEnum.UPDATE_DRAFT, 0.95
 
-        # Search indicators
+        # 7. Search indicators
         if re.search(r"^(?:find|search|show\s+(?:my\s+)?invoices?|list\s+invoices?|ស្វែងរក|រកមើល)", cleaned, re.IGNORECASE):
             return IntentEnum.SEARCH, 0.92
 
-        # Select customer
+        # 8. Select customer
         if re.search(r"^(?:choose|select|customer)\s+\d+|^\d+$", cleaned, re.IGNORECASE):
             if current_draft and "customer_name" not in current_draft:
                 return IntentEnum.SELECT_CUSTOMER, 0.90
 
-        # Create draft indicators (e.g. invoice sokha, bill dara, គិតលុយ, ធ្វើ invoice)
+        # 9. Create draft indicators (e.g. invoice sokha, bill dara, គិតលុយ, ធ្វើ invoice)
         if re.search(r"(?:invoice|bill|create\s+invoice|គិតលុយ|ធ្វើ\s*invoice|វិក្កយបត្រ)\s+([A-Za-z0-9\u1780-\u17FF]+)", cleaned, re.IGNORECASE):
             # Check if items/price mentioned
             if re.search(r"\$|\b\d+\s*(?:usd|khr|riel|រៀល|៛)|(?:at|for|@|ថ្លៃ)\s*\$?\d+", cleaned):
@@ -181,7 +242,12 @@ class HybridNLPExtractor:
             else:
                 return IntentEnum.CLARIFY_NEEDED, 0.85
 
-        # If has customer + items + price but lacks prefix
+        # 10. Fine-tuned Neural Classification (XLM-RoBERTa)
+        neural_res = cls.classify_intent_neural(text)
+        if neural_res and neural_res[1] >= 0.70:
+            return neural_res
+
+        # 11. Heuristic fallback: customer + items + price but lacks prefix
         if re.search(r"(\$|\b\d+\s*(?:usd|khr|riel|រៀល|៛))", cleaned) and re.search(r"[A-Za-z\u1780-\u17FF]{2,}", cleaned):
             return IntentEnum.CREATE_DRAFT, 0.82
 
