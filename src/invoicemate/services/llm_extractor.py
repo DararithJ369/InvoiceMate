@@ -192,9 +192,18 @@ class RuleBasedFallbackExtractor:
         is_update_keyword = any(kw in lower_msg for kw in [
             "actually", "change", "add ", "add", "remove", "delete", "cancel", "drop",
             "take off", "cut", "no ", "without", "make it", "make ", "instead of",
-            "with ", "កែប្រែ", "ប្តូរ", "ថែម", "លុប", "កាត់ចោល", "ដកចេញ", "កែ"
+            "with ", "price", "at ", "for ", "set ", "cost", "កែប្រែ", "ប្តូរ", "ថែម",
+            "លុប", "កាត់ចោល", "ដកចេញ", "កែ", "តម្លៃ", "ថ្លៃ"
         ])
-        if (current_draft and current_draft.get("items") and is_update_keyword):
+        item_name_mentioned = False
+        if current_draft and current_draft.get("items"):
+            for itm in current_draft["items"]:
+                nm = (itm.get("product_name") or itm.get("name", "")).lower()
+                if nm and (nm in lower_msg or any(len(w) > 3 and w in lower_msg for w in nm.split())):
+                    item_name_mentioned = True
+                    break
+
+        if (current_draft and current_draft.get("items") and (is_update_keyword or item_name_mentioned)):
             existing_items_map = []
             for itm in current_draft["items"]:
                 name = itm.get("product_name") or itm.get("name", "Item")
@@ -246,49 +255,102 @@ class RuleBasedFallbackExtractor:
                     if removed_any:
                         existing_items_map = new_items
 
-            # 4b. Identify target item for modification by name overlap
+            # Separate add clause if present (so add price doesn't collide with existing item update)
+            add_match_span = re.search(r"\b(?:add|plus|ថែម)\b.*", lower_msg)
+            if add_match_span:
+                update_text = lower_msg[:add_match_span.start()]
+                add_text = lower_msg[add_match_span.start():]
+            else:
+                update_text = lower_msg
+                add_text = None
+
+            # 4b. Identify target item for modification by name overlap or item index
             target_idx = None
             best_score = 0
-            for idx, itm in enumerate(existing_items_map):
-                name_lower = itm["name"].lower()
-                if name_lower in lower_msg:
-                    score = len(name_lower)
-                    if score > best_score:
-                        best_score = score
-                        target_idx = idx
-                else:
-                    name_words = [w for w in re.findall(r"[a-zA-Z0-9\u1780-\u17FF]+", name_lower) if len(w) > 2]
-                    overlap = sum(1 for w in name_words if w in lower_msg)
-                    if overlap > best_score:
-                        best_score = overlap
-                        target_idx = idx
 
-            # 4c. Extract new quantity
+            # Check for explicit index e.g. "item 2", "#2"
+            idx_m = re.search(r"\b(?:item|no\.?|#)\s*(\d+)\b", update_text)
+            if idx_m:
+                item_no = int(idx_m.group(1))
+                if 1 <= item_no <= len(existing_items_map):
+                    target_idx = item_no - 1
+
+            if target_idx is None:
+                for idx, itm in enumerate(existing_items_map):
+                    name_lower = itm["name"].lower()
+                    if name_lower in update_text:
+                        score = len(name_lower)
+                        if score > best_score:
+                            best_score = score
+                            target_idx = idx
+                    else:
+                        name_words = [w for w in re.findall(r"[a-zA-Z0-9\u1780-\u17FF]+", name_lower) if len(w) > 2]
+                        overlap = sum(1 for w in name_words if w in update_text)
+                        if overlap > best_score:
+                            best_score = overlap
+                            target_idx = idx
+
+            # 4c. Extract new price (unit price)
+            new_price = None
+            price_span = None
+            p_patterns = [
+                r"(?:price\s+(?:of\s+[a-zA-Z0-9\u1780-\u17FF\s]+\s+)?(?:to|is|be|as|at)?|តម្លៃ\s*(?:ទៅ|ជា)?|ថ្លៃ\s*(?:ទៅ|ជា)?)\s*(\$|usd|៛|riel)?\s*(\d+(?:\.\d+)?)\s*(\$|usd|៛|riel)?",
+                r"(?:at|\@|for|ក្នុងតម្លៃ)\s*(\$|usd|៛|riel)?\s*(\d+(?:\.\d+)?)\s*(\$|usd|៛|riel)?(?:\s*(?:for\s+)?each|\s*per\s+(?:item|unit)|\s*មួយ|\s*ក្នុងមួយ)?",
+                r"(\$|usd|៛|riel)\s*(\d+(?:\.\d+)?)(?:\s*(?:for\s+)?each|\s*per\s+(?:item|unit)|\s*មួយ|\s*ក្នុងមួយ)?",
+                r"(\d+(?:\.\d+)?)\s*(\$|usd|៛|riel)(?:\s*(?:for\s+)?each|\s*per\s+(?:item|unit)|\s*មួយ|\s*ក្នុងមួយ)?",
+                r"(\d+(?:\.\d+)?)\s*(?:each|for\s+each|per\s+(?:item|unit)|មួយ|ក្នុងមួយ)",
+            ]
+            for pat in p_patterns:
+                m = re.search(pat, update_text)
+                if m:
+                    groups = [g for g in m.groups() if g and g.replace(".", "", 1).isdigit()]
+                    if groups:
+                        new_price = float(groups[0])
+                        price_span = m.span()
+                        break
+
+            # 4d. Extract new quantity (masking out price span to avoid collision)
+            qty_text = update_text
+            if price_span:
+                qty_text = update_text[:price_span[0]] + " " + update_text[price_span[1]:]
+
             new_qty = None
-            m_prep = re.search(r"(?:with|to|be|as|ជា|ទៅ)\s+(\d+(?:\.\d+)?)", lower_msg)
+            m_prep = re.search(r"(?:with|to|be|as|ជា|ទៅ)\s+(\d+(?:\.\d+)?)", qty_text)
             if m_prep:
                 new_qty = float(m_prep.group(1))
             else:
-                m_qty = re.search(r"(?:make\s+it|actually\s+make\s+it|make|change\s+to|change|quantity\s+to|ប្តូរជា|កែជា)\s+(\d+(?:\.\d+)?)", lower_msg)
-                if m_qty:
-                    new_qty = float(m_qty.group(1))
+                m_make = re.search(r"(?:make\s+it|actually\s+make\s+it|make|change\s+to|change|quantity\s+to|qty\s+to|qty|ប្តូរជា|កែជា|ចំនួន)\s+(?:it\s+)?(?:to\s+)?(\d+(?:\.\d+)?)", qty_text)
+                if m_make:
+                    new_qty = float(m_make.group(1))
+                else:
+                    m_lead = re.search(r"\b(\d+(?:\.\d+)?)\s+[a-zA-Z\u1780-\u17FF]+", qty_text)
+                    if m_lead and "item" not in m_lead.group(0):
+                        new_qty = float(m_lead.group(1))
 
-            if new_qty is not None and existing_items_map:
+            # Apply quantity and/or price update to target item
+            if (new_qty is not None or new_price is not None) and existing_items_map:
                 if target_idx is None:
                     if len(existing_items_map) == 1:
                         target_idx = 0
                     else:
-                        # Prefer item whose current quantity != new_qty
-                        candidates = [i for i, itm in enumerate(existing_items_map) if itm["qty"] != new_qty]
-                        target_idx = candidates[-1] if candidates else len(existing_items_map) - 1
+                        if new_qty is not None:
+                            candidates = [i for i, itm in enumerate(existing_items_map) if itm["qty"] != new_qty]
+                            target_idx = candidates[-1] if candidates else len(existing_items_map) - 1
+                        elif new_price is not None:
+                            candidates = [i for i, itm in enumerate(existing_items_map) if itm["price"] != new_price]
+                            target_idx = candidates[-1] if candidates else len(existing_items_map) - 1
 
                 if target_idx is not None and 0 <= target_idx < len(existing_items_map):
-                    existing_items_map[target_idx]["qty"] = new_qty
+                    if new_qty is not None:
+                        existing_items_map[target_idx]["qty"] = new_qty
+                    if new_price is not None:
+                        existing_items_map[target_idx]["price"] = new_price
 
-            # 4d. Check for adding items
+            # 4e. Check for adding items
+            search_add_text = add_text if add_text else lower_msg
             add_match = re.search(
                 r"(?:add|plus|ថែម)\s+(.+?)\s+(?:for|at|\@|ថ្លៃ|តម្លៃ)\s*(\$|usd|៛|riel)?\s*(\d+(?:\.\d+)?)\s*(\$|usd|៛|riel)?",
-                lower_msg,
+                search_add_text,
                 re.IGNORECASE,
             )
             if add_match:

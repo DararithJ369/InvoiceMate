@@ -266,6 +266,11 @@ class HybridNLPExtractor:
         currency = "USD"
         due_date = None
 
+        if intent == IntentEnum.UPDATE_DRAFT and current_draft:
+            from invoicemate.services.llm_extractor import RuleBasedFallbackExtractor
+            fb = RuleBasedFallbackExtractor.extract(processed_text, current_draft=current_draft)
+            return (fb.customer_name, fb.items, fb.currency or currency, fb.due_date)
+
         if gliner:
             try:
                 labels = ["BUYER_NAME", "PRODUCT_NAME", "PRICE", "QUANTITY", "CURRENCY", "DUE_DATE"]

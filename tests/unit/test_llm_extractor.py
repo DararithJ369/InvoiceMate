@@ -231,3 +231,32 @@ def test_cancel_and_remove_draft_items():
     assert res3.intent == "cancel"
 
 
+def test_update_draft_price_and_quantity():
+    draft = {
+        "id": 1,
+        "customer_name": "Naroth",
+        "currency": "USD",
+        "items": [
+            {"product_name": "iPhone 17 Pro Max 1TB", "quantity": 2, "unit_price": 1250},
+            {"product_name": "Macbook Pro M1 32GB 1TB", "quantity": 2, "unit_price": 1200},
+        ],
+    }
+
+    # 1. Update only unit price
+    res1 = extract_intent("actually make Macbook Pro M1 at 1150$ for each", current_draft=draft)
+    assert res1.intent == "update_draft"
+    assert len(res1.items) == 2
+    assert res1.items[0].unit_price == Decimal("1250.0")
+    assert res1.items[0].qty == Decimal("2.0")
+    assert res1.items[1].name == "Macbook Pro M1 32GB 1TB"
+    assert res1.items[1].unit_price == Decimal("1150.0")
+    assert res1.items[1].qty == Decimal("2.0")
+
+    # 2. Update both quantity and unit price
+    res2 = extract_intent("actually make 3 Macbook Pro M1 for 1100$ for each", current_draft=draft)
+    assert res2.intent == "update_draft"
+    assert res2.items[1].unit_price == Decimal("1100.0")
+    assert res2.items[1].qty == Decimal("3.0")
+
+
+
