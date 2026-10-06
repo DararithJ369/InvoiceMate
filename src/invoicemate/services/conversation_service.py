@@ -404,4 +404,11 @@ def process_callback_query(
                 "message": f"Payment for invoice #{inv.invoice_number} is still pending. Customer has not completed the transfer yet.",
             }
 
+    elif action_prefix in ["cb_edit_draft", "edit_inv"] and target_id:
+        return {
+            "action": "prompt_edit",
+            "draft_id": target_id,
+            "message": "Please send your edit instructions in chat (e.g. <code>actually make it 3 monitors</code>).",
+        }
+
     return {"action": "unhandled", "data": callback_data}

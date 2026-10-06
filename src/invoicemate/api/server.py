@@ -31,6 +31,15 @@ def health_check():
     return {"status": "ok", "app": settings.PROJECT_NAME, "version": settings.VERSION}
 
 
+def get_db():
+    """Database session dependency for FastAPI routes."""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 @app.get("/pdf/{token}/{filename}")
 def serve_secure_invoice_pdf(token: str, filename: str):
     """
@@ -40,10 +49,26 @@ def serve_secure_invoice_pdf(token: str, filename: str):
     safe_token = os.path.basename(token)
     safe_filename = os.path.basename(filename)
 
+    if not safe_filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files can be served.")
+
     file_path = os.path.join(settings.STORAGE_DIR, safe_token, safe_filename)
     if not os.path.exists(file_path):
         # Fallback check directly in root storage
         file_path = os.path.join(settings.STORAGE_DIR, safe_filename)
+
+    # Fallback to uppercase filename check for case-sensitive filesystems
+    if not os.path.exists(file_path):
+        upper_name = safe_filename.upper()
+        if not upper_name.endswith(".PDF"):
+            upper_name += ".PDF"
+        upper_token_path = os.path.join(settings.STORAGE_DIR, safe_token, upper_name)
+        if os.path.exists(upper_token_path):
+            file_path = upper_token_path
+        else:
+            upper_root_path = os.path.join(settings.STORAGE_DIR, upper_name)
+            if os.path.exists(upper_root_path):
+                file_path = upper_root_path
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"PDF invoice '{safe_filename}' not found.")
@@ -63,7 +88,18 @@ def serve_invoice_pdf(filename: str):
     Example: GET /invoices/INV-000001.pdf
     """
     safe_filename = os.path.basename(filename)
+
+    if not safe_filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files can be served.")
+
     file_path = os.path.join(settings.STORAGE_DIR, safe_filename)
+    if not os.path.exists(file_path):
+        upper_name = safe_filename.upper()
+        if not upper_name.endswith(".PDF"):
+            upper_name += ".PDF"
+        upper_path = os.path.join(settings.STORAGE_DIR, upper_name)
+        if os.path.exists(upper_path):
+            file_path = upper_path
 
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"PDF invoice '{safe_filename}' not found.")
@@ -77,63 +113,52 @@ def serve_invoice_pdf(filename: str):
 
 
 @app.get("/api/invoices")
-def list_invoices_api(limit: int = 20, org_id: int = 1):
+def list_invoices_api(limit: int = 20, org_id: int = 1, db: Session = Depends(get_db)):
     """List recent invoices via REST API scoped by org_id."""
-    with SessionLocal() as db:
-        invoices = get_invoice_history(db, org_id=org_id, timeframe="all", limit=limit)
-        return [
-            {
-                "id": inv.id,
-                "invoice_number": inv.invoice_number,
-                "customer": inv.customer.name if inv.customer else None,
-                "total": float(inv.total),
-                "currency": inv.currency,
-                "status": inv.status,
-                "pdf_url": inv.pdf_url,
-                "created_at": inv.created_at.isoformat(),
-            }
-            for inv in invoices
-        ]
-
-
-@app.get("/api/invoices/{invoice_number}")
-def get_invoice_api(invoice_number: str, org_id: int = 1):
-    """Get single invoice details by invoice number via REST API."""
-    with SessionLocal() as db:
-        inv = get_invoice_by_number(db, invoice_number, org_id=org_id)
-        if not inv:
-            raise HTTPException(status_code=404, detail=f"Invoice '{invoice_number}' not found.")
-
-        return {
+    invoices = get_invoice_history(db, org_id=org_id, timeframe="all", limit=limit)
+    return [
+        {
             "id": inv.id,
             "invoice_number": inv.invoice_number,
             "customer": inv.customer.name if inv.customer else None,
-            "subtotal": float(inv.subtotal),
-            "tax": float(inv.tax),
             "total": float(inv.total),
             "currency": inv.currency,
             "status": inv.status,
             "pdf_url": inv.pdf_url,
-            "items": [
-                {
-                    "product_name": item.product_name,
-                    "quantity": float(item.quantity),
-                    "unit_price": float(item.unit_price),
-                    "line_total": float(item.line_total),
-                }
-                for item in inv.items
-            ],
-            "created_at": inv.created_at.isoformat(),
+            "created_at": inv.created_at.isoformat() if inv.created_at else None,
         }
+        for inv in invoices
+    ]
 
 
-def get_db():
-    """Database session dependency for FastAPI routes."""
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+@app.get("/api/invoices/{invoice_number}")
+def get_invoice_api(invoice_number: str, org_id: int = 1, db: Session = Depends(get_db)):
+    """Get single invoice details by invoice number via REST API."""
+    inv = get_invoice_by_number(db, invoice_number, org_id=org_id)
+    if not inv:
+        raise HTTPException(status_code=404, detail=f"Invoice '{invoice_number}' not found.")
+
+    return {
+        "id": inv.id,
+        "invoice_number": inv.invoice_number,
+        "customer": inv.customer.name if inv.customer else None,
+        "subtotal": float(inv.subtotal),
+        "tax": float(inv.tax),
+        "total": float(inv.total),
+        "currency": inv.currency,
+        "status": inv.status,
+        "pdf_url": inv.pdf_url,
+        "items": [
+            {
+                "product_name": item.product_name,
+                "quantity": float(item.quantity),
+                "unit_price": float(item.unit_price),
+                "line_total": float(item.line_total),
+            }
+            for item in inv.items
+        ],
+        "created_at": inv.created_at.isoformat() if inv.created_at else None,
+    }
 
 
 @app.post("/api/v1/webhooks/bakong")

@@ -20,7 +20,7 @@ InvoiceMate/
 │   ├── models/       # Multi-tenant ORM models
 │   ├── schemas/      # Pydantic validation schemas
 │   └── services/     # Tax calculator, KHQR generator, PDF renderer & NLP
-├── tests/            # Automated test suite (68 unit tests)
+├── tests/            # Automated test suite (80 unit & integration tests)
 ├── scripts/          # Demos & utility scripts
 └── main.py           # Database initialization & seeding CLI
 ```

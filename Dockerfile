@@ -39,6 +39,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy virtual environment and app files from builder
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
+COPY assets/ ./assets/
+COPY data/ ./data/
 COPY main.py pyproject.toml README.md ./
 
 # Set environment variables

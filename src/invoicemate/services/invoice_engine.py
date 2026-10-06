@@ -588,7 +588,7 @@ def get_invoice_by_id(db: Session, invoice_id: int, org_id: Optional[int] = None
 
 def get_invoice_by_number(db: Session, invoice_number: str, org_id: Optional[int] = None) -> Optional[Invoice]:
     """Fetch invoice by invoice number, strictly scoped to org_id if provided."""
-    stmt = select(Invoice).where(Invoice.invoice_number == invoice_number.strip())
+    stmt = select(Invoice).where(func.upper(Invoice.invoice_number) == invoice_number.strip().upper())
     if org_id is not None:
         stmt = stmt.where(Invoice.org_id == org_id)
     return db.scalars(stmt).first()

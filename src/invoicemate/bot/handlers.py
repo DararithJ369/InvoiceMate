@@ -85,7 +85,7 @@ async def handle_start_command(message: Message):
     await send_event_gif(message, "welcome", caption=welcome_text)
 
 
-@router.message(Command("help"))
+@router.message(Command("help", "info", "about"))
 async def handle_help_command(message: Message):
     help_text = (
         "<b>ពាក្យបញ្ជា / Available Commands:</b>\n"
@@ -118,7 +118,7 @@ async def handle_create_command(message: Message):
     await message.answer(guide_text, parse_mode="HTML")
 
 
-@router.message(Command("clear"))
+@router.message(Command("clear", "cancel", "reset"))
 async def handle_clear_command(message: Message):
     with SessionLocal() as db:
         org_id = _get_org_for_user(db, message.from_user)
@@ -173,7 +173,7 @@ async def handle_status_command(message: Message):
         await message.answer(summary, parse_mode="HTML")
 
 
-@router.message(Command("invoices", "history"))
+@router.message(Command("invoices", "history", "invoice", "list"))
 async def handle_history_command(message: Message):
     with SessionLocal() as db:
         org_id = _get_org_for_user(db, message.from_user)
@@ -227,7 +227,7 @@ async def handle_get_pdf_command(message: Message):
             await message.answer("Could not generate PDF document.")
 
 
-@router.message(Command("paid"))
+@router.message(Command("paid", "pay"))
 async def handle_mark_paid_command(message: Message):
     text = message.text.strip()
     parts = text.split()
@@ -284,6 +284,43 @@ async def handle_natural_language_message(message: Message):
                         parse_mode="HTML",
                     )
                     return
+                else:
+                    await message.answer(f"Could not generate PDF document for invoice '{inv_num}'.")
+                    return
+            else:
+                await message.answer(f"Invoice '{inv_num}' not found.")
+                return
+
+    # Quick check for natural language mark paid request (e.g. "mark INV-000001 as paid", "paid INV-000001")
+    paid_req = re.search(
+        r"\b(?:mark\s+(?:as\s+)?paid|paid|កត់សម្គាល់ថាបានបង់|បានបង់|បង់រួច)\s+(?:invoice\s+|វិក្កយបត្រ\s*)?(inv-\d+)\b"
+        r"|\b(inv-\d+)\s+(?:is\s+paid|was\s+paid|marked\s+paid|paid|បានបង់|បង់រួច)\b",
+        user_text,
+        re.IGNORECASE,
+    )
+    if paid_req:
+        inv_num = (paid_req.group(1) or paid_req.group(2)).upper()
+        with SessionLocal() as db:
+            org_id = _get_org_for_user(db, message.from_user)
+            inv = get_invoice_by_number(db, inv_num, org_id=org_id)
+            if inv:
+                try:
+                    paid_inv = mark_as_paid(db, inv.id, org_id=org_id)
+                    await send_event_gif(
+                        message,
+                        "paid",
+                        caption=f"Invoice <b>{paid_inv.invoice_number}</b> marked as <b>PAID</b>!",
+                    )
+                    card_text = format_invoice_card(paid_inv, title="វិក្កយបត្របានទូទាត់រួច / INVOICE PAID")
+                    paid_kb = get_issued_invoice_keyboard(paid_inv.id, "paid")
+                    await message.answer(card_text, reply_markup=paid_kb, parse_mode="HTML")
+                    return
+                except Exception as err:
+                    await message.answer(f"Error: {err}")
+                    return
+            else:
+                await message.answer(f"Invoice '{inv_num}' not found.")
+                return
 
     with SessionLocal() as db:
         org_id = _get_org_for_user(db, message.from_user)
@@ -502,4 +539,22 @@ async def handle_dl_pdf_cb(callback: CallbackQuery):
             await callback.answer("PDF sent!")
         else:
             await callback.answer("Could not generate PDF document.", show_alert=True)
+
+
+@router.callback_query(F.data == "cb_noop")
+async def handle_noop_cb(callback: CallbackQuery):
+    await callback.answer("វិក្កយបត្រនេះបានបង់រួចហើយ / Invoice already marked as PAID.")
+
+
+@router.callback_query(F.data.startswith("cb_edit_draft:") | F.data.startswith("edit_inv:"))
+async def handle_edit_draft_cb(callback: CallbackQuery):
+    await callback.answer(
+        "សូមវាយបញ្ចូលការកែប្រែរបស់អ្នក (e.g. actually make it 3) / Please type your edit in the chat.",
+        show_alert=True,
+    )
+
+
+@router.callback_query()
+async def handle_fallback_cb(callback: CallbackQuery):
+    await callback.answer()
 

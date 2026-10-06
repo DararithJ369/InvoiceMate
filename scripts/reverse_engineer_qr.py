@@ -130,5 +130,26 @@ def reverse_engineer(img_path: str):
 
 
 if __name__ == "__main__":
-    target = "./storage/test_invoices/qr/image.png"
+    import argparse
+    import glob
+    import sys
+
+    parser = argparse.ArgumentParser(description="Reverse Engineer and Validate EMVCo KHQR Barcode Image")
+    parser.add_argument("image", nargs="?", help="Path to QR code image (PNG/JPEG)")
+    args = parser.parse_args()
+
+    target = args.image
+    if not target:
+        candidates = (
+            glob.glob("./storage/invoices/qr/*_qr.png")
+            + glob.glob("./storage/*.png")
+            + glob.glob("./storage/test_qr.png")
+        )
+        if candidates:
+            target = candidates[0]
+            print(f"No image path specified. Auto-detected QR asset: {target}\n")
+        else:
+            print("Usage: uv run python scripts/reverse_engineer_qr.py <path_to_qr_image.png>")
+            sys.exit(1)
+
     reverse_engineer(target)
