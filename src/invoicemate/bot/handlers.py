@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+from decimal import Decimal
 from aiogram import Router, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -16,8 +17,10 @@ from invoicemate.services.conversation_service import (
 from invoicemate.services.invoice_engine import (
     get_invoice_history,
     get_invoice_by_number,
+    search_invoices,
     mark_as_paid,
     cancel_draft,
+    cancel_invoice,
 )
 from invoicemate.bot.card_formatter import format_invoice_card, get_draft_keyboard, get_issued_invoice_keyboard
 from invoicemate.bot.gifs import send_event_gif
@@ -71,8 +74,10 @@ async def handle_start_command(message: Message):
         "<b>ពាក្យបញ្ជា / Available Commands:</b>\n"
         "• /create — How to create a multi-item invoice\n"
         "• /invoices — List recent invoice history & PDF links\n"
-        "• /status — Check status of invoices\n"
+        "• /search <code>[QUERY]</code> — Search invoices by customer or item\n"
+        "• /status — Check summary of invoice revenue & status\n"
         "• /paid <code>[INV-NUMBER]</code> — Mark an invoice as paid\n"
+        "• /cancel_invoice <code>[INV-NUMBER]</code> — Cancel/void an issued invoice\n"
         "• /clear — Clear active draft\n"
         "• /help — Show this help guide\n\n"
         "<b>ឧទាហរណ៍ / Natural Language Examples:</b>\n"
@@ -91,8 +96,10 @@ async def handle_help_command(message: Message):
         "<b>ពាក្យបញ្ជា / Available Commands:</b>\n"
         "• /create — How to create a multi-item invoice\n"
         "• /invoices — List recent invoice history & PDF links\n"
-        "• /status — Check status of invoices\n"
+        "• /search <code>[QUERY]</code> — Search invoices by customer or item\n"
+        "• /status — Check summary of invoice revenue & status\n"
         "• /paid <code>[INV-NUMBER]</code> — Mark an invoice as paid\n"
+        "• /cancel_invoice <code>[INV-NUMBER]</code> — Cancel/void an issued invoice\n"
         "• /clear — Clear active draft\n"
         "• /help — Show this help guide\n\n"
         "<b>ឧទាហរណ៍ / Natural Language Examples:</b>\n"
@@ -139,7 +146,7 @@ async def handle_clear_command(message: Message):
             )
 
 
-@router.message(Command("status"))
+@router.message(Command("status", "stats", "summary"))
 async def handle_status_command(message: Message):
     text = message.text.strip()
     parts = text.split()
@@ -156,21 +163,96 @@ async def handle_status_command(message: Message):
             await message.answer(card_text, parse_mode="HTML")
             return
 
-        all_invoices = get_invoice_history(db, org_id=org_id, timeframe="all", limit=50)
+        all_invoices = get_invoice_history(db, org_id=org_id, timeframe="all", limit=100)
         sent = [i for i in all_invoices if i.status == "sent"]
         paid = [i for i in all_invoices if i.status == "paid"]
         cancelled = [i for i in all_invoices if i.status == "cancelled"]
 
-        summary = (
-            "<b>INVOICE STATUS SUMMARY</b>\n"
-            "──────────────────────────────\n"
-            f"• <b>Sent (Unpaid):</b> {len(sent)}\n"
-            f"• <b>Paid:</b> {len(paid)}\n"
-            f"• <b>Cancelled:</b> {len(cancelled)}\n"
-            "──────────────────────────────\n"
-            "<i>Use <code>/invoices</code> to view details or <code>/paid [INV-NUMBER]</code> to mark paid.</i>"
+        paid_usd = sum((i.total for i in paid if i.currency == "USD"), Decimal("0.00"))
+        paid_khr = sum((i.total for i in paid if i.currency == "KHR"), Decimal("0"))
+        unpaid_usd = sum((i.total for i in sent if i.currency == "USD"), Decimal("0.00"))
+        unpaid_khr = sum((i.total for i in sent if i.currency == "KHR"), Decimal("0"))
+
+        summary_lines = [
+            "<b>ស្ថានភាពហិរញ្ញវត្ថុ / INVOICE & REVENUE SUMMARY</b>",
+            "──────────────────────────────",
+            f"• <b>Paid Invoices ({len(paid)}):</b>",
+        ]
+        if paid_usd > 0 or paid_khr == 0:
+            summary_lines.append(f"   ចំណូលបានបង់ / Revenue (USD): <b>${paid_usd:,.2f}</b>")
+        if paid_khr > 0:
+            summary_lines.append(f"   ចំណូលបានបង់ / Revenue (KHR): <b>{paid_khr:,.0f} ៛</b>")
+
+        summary_lines.append(f"• <b>Unpaid / Sent Invoices ({len(sent)}):</b>")
+        if unpaid_usd > 0 or unpaid_khr == 0:
+            summary_lines.append(f"   មិនទាន់បង់ / Outstanding (USD): <b>${unpaid_usd:,.2f}</b>")
+        if unpaid_khr > 0:
+            summary_lines.append(f"   មិនទាន់បង់ / Outstanding (KHR): <b>{unpaid_khr:,.0f} ៛</b>")
+
+        summary_lines.append(f"• <b>Cancelled / Voided:</b> {len(cancelled)}")
+        summary_lines.append("──────────────────────────────")
+        summary_lines.append(
+            "<i>Use <code>/invoices</code> to list, <code>/search [QUERY]</code> to search, or <code>/paid [INV-NUMBER]</code> to settle.</i>"
         )
-        await message.answer(summary, parse_mode="HTML")
+        await message.answer("\n".join(summary_lines), parse_mode="HTML")
+
+
+@router.message(Command("search", "find"))
+async def handle_search_command(message: Message):
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/search Sokha</code> or <code>/find INV-000001</code>", parse_mode="HTML")
+        return
+
+    query = parts[1].strip()
+    with SessionLocal() as db:
+        org_id = _get_org_for_user(db, message.from_user)
+        results = search_invoices(db, org_id=org_id, query=query, limit=10)
+        history_text = _format_history_list(results, title=f"លទ្ធផលស្វែងរក / RESULTS FOR '{query}'")
+
+        buttons = []
+        for inv in results[:5]:
+            row_buttons = [
+                InlineKeyboardButton(text=f"PDF #{inv.invoice_number}", callback_data=f"dl_pdf:{inv.invoice_number}")
+            ]
+            if inv.status == "sent":
+                row_buttons.append(InlineKeyboardButton(text="Mark Paid", callback_data=f"mark_paid:{inv.id}"))
+            buttons.append(row_buttons)
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+        await message.answer(history_text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(Command("cancel_invoice", "void"))
+async def handle_cancel_invoice_command(message: Message):
+    text = message.text.strip()
+    parts = text.split()
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/cancel_invoice INV-000001</code>", parse_mode="HTML")
+        return
+
+    inv_num = parts[1].strip()
+    with SessionLocal() as db:
+        org_id = _get_org_for_user(db, message.from_user)
+        inv = get_invoice_by_number(db, inv_num, org_id=org_id)
+        if not inv:
+            await message.answer(f"Invoice '{inv_num}' not found.")
+            return
+
+        if inv.status == "cancelled":
+            await message.answer(f"Invoice <b>{inv.invoice_number}</b> is already cancelled.", parse_mode="HTML")
+            return
+
+        try:
+            cancelled_inv = cancel_invoice(db, inv.id, org_id=org_id)
+            await send_event_gif(
+                message,
+                "clear",
+                caption=f"Invoice <b>{cancelled_inv.invoice_number}</b> has been <b>CANCELLED / VOIDED</b>.",
+            )
+        except Exception as err:
+            await message.answer(f"Error cancelling invoice: {err}")
 
 
 @router.message(Command("invoices", "history", "invoice", "list"))

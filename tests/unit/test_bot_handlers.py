@@ -110,3 +110,134 @@ def test_conversation_service_edit_draft_callback(db_session):
     assert res["draft_id"] == 10
 
 
+@pytest.mark.anyio
+async def test_bot_status_and_revenue_summary(db_session, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from invoicemate.bot.handlers import handle_status_command
+    from invoicemate.services.org_service import create_org
+
+    org = create_org(db_session, telegram_user_id="tg_status_user")
+    inv_paid = Invoice(
+        org_id=org.id,
+        invoice_number="INV-008001",
+        subtotal=Decimal("200.00"),
+        tax=Decimal("0.00"),
+        total=Decimal("200.00"),
+        currency="USD",
+        status=InvoiceStatus.PAID.value,
+        items=[],
+    )
+    inv_unpaid = Invoice(
+        org_id=org.id,
+        invoice_number="INV-008002",
+        subtotal=Decimal("50000"),
+        tax=Decimal("0.00"),
+        total=Decimal("50000"),
+        currency="KHR",
+        status=InvoiceStatus.SENT.value,
+        items=[],
+    )
+    db_session.add_all([inv_paid, inv_unpaid])
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    monkeypatch.setattr("invoicemate.bot.handlers.SessionLocal", SessionContext)
+
+    # 1. Test overall status summary with revenue metrics
+    msg = AsyncMock()
+    msg.text = "/status"
+    msg.from_user = MagicMock()
+    msg.from_user.id = "tg_status_user"
+    msg.from_user.full_name = "Status User"
+    msg.from_user.username = "statususer"
+
+    await handle_status_command(msg)
+    msg.answer.assert_called_once()
+    reply_text = msg.answer.call_args[0][0]
+    assert "INVOICE & REVENUE SUMMARY" in reply_text
+    assert "$200.00" in reply_text
+    assert "50,000 ៛" in reply_text
+
+    # 2. Test status of specific invoice
+    msg.reset_mock()
+    msg.text = "/status INV-008001"
+    await handle_status_command(msg)
+    msg.answer.assert_called_once()
+    reply_text_single = msg.answer.call_args[0][0]
+    assert "INV-008001" in reply_text_single
+    assert "PAID" in reply_text_single
+
+
+@pytest.mark.anyio
+async def test_bot_search_and_cancel_invoice_commands(db_session, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from invoicemate.bot.handlers import handle_search_command, handle_cancel_invoice_command
+    from invoicemate.services.org_service import create_org
+
+    org = create_org(db_session, telegram_user_id="tg_search_cancel_user")
+    cust = Customer(org_id=org.id, name="Sovan Technologies")
+    db_session.add(cust)
+    db_session.flush()
+
+    inv = Invoice(
+        org_id=org.id,
+        invoice_number="INV-008003",
+        customer_id=cust.id,
+        subtotal=Decimal("150.00"),
+        tax=Decimal("0.00"),
+        total=Decimal("150.00"),
+        currency="USD",
+        status=InvoiceStatus.SENT.value,
+        items=[InvoiceItem(product_name="Mechanical Keyboard", quantity=Decimal("1"), unit_price=Decimal("150.00"), line_total=Decimal("150.00"))],
+    )
+    db_session.add(inv)
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    monkeypatch.setattr("invoicemate.bot.handlers.SessionLocal", SessionContext)
+
+    msg = AsyncMock()
+    msg.from_user = MagicMock()
+    msg.from_user.id = "tg_search_cancel_user"
+    msg.from_user.full_name = "Test User"
+    msg.from_user.username = "testuser"
+
+    # Search usage
+    msg.text = "/search"
+    await handle_search_command(msg)
+    assert "Usage:" in msg.answer.call_args[0][0]
+
+    # Search query
+    msg.reset_mock()
+    msg.text = "/search Keyboard"
+    await handle_search_command(msg)
+    msg.answer.assert_called_once()
+    search_reply = msg.answer.call_args[0][0]
+    assert "INV-008003" in search_reply
+    assert "Sovan Technologies" in search_reply
+
+    # Cancel invoice
+    msg.reset_mock()
+    msg.text = "/cancel_invoice INV-008003"
+    await handle_cancel_invoice_command(msg)
+    db_session.refresh(inv)
+    assert inv.status == "cancelled"
+
+    # Cancel already cancelled
+    msg.reset_mock()
+    msg.text = "/cancel_invoice INV-008003"
+    await handle_cancel_invoice_command(msg)
+    assert "already cancelled" in msg.answer.call_args[0][0]
+
+
+
