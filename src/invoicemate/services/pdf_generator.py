@@ -68,7 +68,12 @@ def render_invoice_pdf_bytes(
     rate_source = rate_info.source
     rate_date = rate_info.bulletin_date
 
-    khr_total = rate_info.to_khr(invoice.total) if invoice.currency == "USD" else invoice.total
+    if invoice.currency == "KHR":
+        khr_total = invoice.total
+        usd_total = rate_info.to_usd(invoice.total)
+    else:
+        usd_total = invoice.total
+        khr_total = rate_info.to_khr(invoice.total)
 
     # 1. Generate Dynamic KHQR String & In-memory / temp image
     khqr_str, khqr_md5 = generate_dynamic_khqr(
@@ -116,8 +121,9 @@ def render_invoice_pdf_bytes(
         if getattr(invoice, 'created_at', None)
         else datetime.now().strftime('%Y-%m-%d')
     )
-    doc_header_khmer = "វិក្កយបត្រពន្ធ" if is_tax_invoice else "វិក្កយបត្រពាណិជ្ជកម្ម"
-    doc_header_eng = "TAX INVOICE" if is_tax_invoice else "COMMERCIAL INVOICE"
+    effective_is_tax = is_tax_invoice or getattr(invoice, 'is_tax_invoice', False) or (getattr(invoice, 'tax', Decimal("0.00")) > Decimal("0.00"))
+    doc_header_khmer = "វិក្កយបត្រពន្ធ" if effective_is_tax else "វិក្កយបត្រពាណិជ្ជកម្ម"
+    doc_header_eng = "TAX INVOICE" if effective_is_tax else "COMMERCIAL INVOICE"
 
     # --- Header Section (Bilingual Hierarchy) ---
     pdf.set_font(active_font, "B", 16)
@@ -197,8 +203,12 @@ def render_invoice_pdf_bytes(
             row = table.row()
             row.cell(itm.product_name)
             row.cell(f"{itm.quantity:g}")
-            row.cell(f"{currency_sym}{itm.unit_price:,.2f}")
-            row.cell(f"{currency_sym}{itm.line_total:,.2f}")
+            if invoice.currency == "KHR":
+                row.cell(f"{currency_sym}{itm.unit_price:,.0f}")
+                row.cell(f"{currency_sym}{itm.line_total:,.0f}")
+            else:
+                row.cell(f"{currency_sym}{itm.unit_price:,.2f}")
+                row.cell(f"{currency_sym}{itm.line_total:,.2f}")
             item_note = getattr(itm, "note", None) or "-"
             row.cell(item_note)
 
@@ -224,18 +234,29 @@ def render_invoice_pdf_bytes(
     pdf.set_font(active_font, "", 9)
     pdf.set_text_color(51, 65, 85)
 
+    subtotal_str = (
+        f"{currency_sym}{invoice.subtotal:,.0f}"
+        if invoice.currency == "KHR"
+        else f"{currency_sym}{invoice.subtotal:,.2f}"
+    )
     pdf.cell(48, 6, "សរុប / Subtotal:", align="R")
-    pdf.cell(38, 6, f"{currency_sym}{invoice.subtotal:,.2f}", align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(38, 6, subtotal_str, align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_x(105)
-    pdf.cell(48, 6, "អាករ (VAT 10%):", align="R")
-    pdf.cell(38, 6, f"{currency_sym}{invoice.tax:,.2f}", align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    tax_label = "អាករ (VAT 10%):" if effective_is_tax else "អាករ / VAT:"
+    tax_str = (
+        f"{currency_sym}{invoice.tax:,.0f}"
+        if invoice.currency == "KHR"
+        else f"{currency_sym}{invoice.tax:,.2f}"
+    )
+    pdf.cell(48, 6, tax_label, align="R")
+    pdf.cell(38, 6, tax_str, align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_x(105)
     pdf.set_font(active_font, "B", 10)
     pdf.set_text_color(29, 78, 216)
     pdf.cell(48, 7, "សរុបរួម (USD) / TOTAL:", align="R")
-    pdf.cell(38, 7, f"${invoice.total:,.2f}", align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+    pdf.cell(38, 7, f"${usd_total:,.2f}", align="R", new_x=XPos.LMARGIN, new_y=YPos.NEXT)
 
     pdf.set_x(105)
     pdf.set_text_color(4, 120, 87)

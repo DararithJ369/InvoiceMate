@@ -22,6 +22,12 @@ class ExchangeRateResult:
         """Convert USD amount to KHR rounded to nearest integer."""
         return (usd_amount * self.rate).quantize(Decimal("1"))
 
+    def to_usd(self, khr_amount: Decimal) -> Decimal:
+        """Convert KHR amount to USD rounded to 2 decimal places."""
+        if not self.rate:
+            return Decimal("0.00")
+        return (khr_amount / self.rate).quantize(Decimal("0.01"))
+
     def __repr__(self) -> str:
         return f"<ExchangeRateResult(rate={self.rate}, source='{self.source}', date='{self.bulletin_date}')>"
 
