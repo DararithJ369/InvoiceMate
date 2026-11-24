@@ -2,7 +2,7 @@ import os
 from typing import Optional, Dict, Any, List
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Depends
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -17,6 +17,8 @@ from invoicemate.services.invoice_engine import (
     cancel_invoice,
 )
 from invoicemate.services.customer_service import find_customers_by_name, get_customer_by_id
+from invoicemate.services.export_service import export_invoices_to_csv
+from invoicemate.services.exchange_rate_service import resolve_exchange_rate
 from invoicemate.services.bakong_webhook_service import (
     verify_webhook_signature,
     process_bakong_webhook_payment,
@@ -169,6 +171,41 @@ def list_invoices_api(
         }
         for inv in invoices
     ]
+
+
+@app.get("/api/invoices/export")
+def export_invoices_csv_api(
+    org_id: int = 1,
+    timeframe: str = "all",
+    status: Optional[str] = None,
+    customer_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Export organization sales journal to CSV format per Cambodian GDT regulations.
+    Supports filtering by timeframe ('today', 'this_week', 'this_month', 'all'), status, or customer.
+    """
+    invoices = get_invoice_history(
+        db,
+        org_id=org_id,
+        timeframe=timeframe,
+        status=status,
+        customer_id=customer_id,
+        limit=5000,
+    )
+    try:
+        rate_info = resolve_exchange_rate()
+    except Exception:
+        rate_info = None
+
+    csv_content = export_invoices_to_csv(invoices, exchange_rate_result=rate_info)
+    filename = f"sales_journal_{timeframe}.csv"
+
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 @app.get("/api/invoices/stats")

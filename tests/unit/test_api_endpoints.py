@@ -290,3 +290,29 @@ def test_invoice_actions_api(api_client, db_session):
     db_session.refresh(inv_cancel)
     assert inv_cancel.status == "cancelled"
 
+
+def test_export_invoices_csv_api(api_client, db_session):
+    org = create_org(db_session, telegram_user_id="tg_export_api_user")
+    inv = Invoice(
+        org_id=org.id,
+        invoice_number="INV-003001",
+        subtotal=Decimal("120.00"),
+        tax=Decimal("12.00"),
+        total=Decimal("132.00"),
+        currency="USD",
+        status=InvoiceStatus.SENT.value,
+        items=[InvoiceItem(product_name="Consulting", quantity=Decimal("1"), unit_price=Decimal("120.00"), line_total=Decimal("120.00"))],
+    )
+    db_session.add(inv)
+    db_session.commit()
+
+    res = api_client.get(f"/api/invoices/export?org_id={org.id}&timeframe=all")
+    assert res.status_code == 200
+    assert "text/csv" in res.headers["content-type"]
+    assert "attachment; filename=sales_journal_all.csv" in res.headers["content-disposition"]
+    text = res.text
+    assert "Invoice Number" in text
+    assert "INV-003001" in text
+    assert "132.00" in text
+
+
