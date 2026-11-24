@@ -4,7 +4,14 @@ import re
 from decimal import Decimal
 from aiogram import Router, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    FSInputFile,
+    BufferedInputFile,
+)
 
 from invoicemate.core.config import settings
 from invoicemate.db.session import SessionLocal
@@ -22,6 +29,13 @@ from invoicemate.services.invoice_engine import (
     cancel_draft,
     cancel_invoice,
 )
+from invoicemate.services.customer_service import (
+    find_customers_by_name,
+    get_customer_metrics,
+    get_customer_invoices,
+)
+from invoicemate.services.export_service import export_invoices_to_csv
+from invoicemate.services.exchange_rate_service import resolve_exchange_rate
 from invoicemate.bot.card_formatter import format_invoice_card, get_draft_keyboard, get_issued_invoice_keyboard
 from invoicemate.bot.gifs import send_event_gif
 
@@ -74,8 +88,11 @@ async def handle_start_command(message: Message):
         "<b>ពាក្យបញ្ជា / Available Commands:</b>\n"
         "• /create — How to create a multi-item invoice\n"
         "• /invoices — List recent invoice history & PDF links\n"
+        "• /unpaid — List pending unpaid/due invoices\n"
         "• /search <code>[QUERY]</code> — Search invoices by customer or item\n"
+        "• /customer <code>[NAME]</code> — Look up customer profile & history\n"
         "• /status — Check summary of invoice revenue & status\n"
+        "• /export — Export sales journal CSV for accounting\n"
         "• /paid <code>[INV-NUMBER]</code> — Mark an invoice as paid\n"
         "• /cancel_invoice <code>[INV-NUMBER]</code> — Cancel/void an issued invoice\n"
         "• /clear — Clear active draft\n"
@@ -96,8 +113,11 @@ async def handle_help_command(message: Message):
         "<b>ពាក្យបញ្ជា / Available Commands:</b>\n"
         "• /create — How to create a multi-item invoice\n"
         "• /invoices — List recent invoice history & PDF links\n"
+        "• /unpaid — List pending unpaid/due invoices\n"
         "• /search <code>[QUERY]</code> — Search invoices by customer or item\n"
+        "• /customer <code>[NAME]</code> — Look up customer profile & history\n"
         "• /status — Check summary of invoice revenue & status\n"
+        "• /export — Export sales journal CSV for accounting\n"
         "• /paid <code>[INV-NUMBER]</code> — Mark an invoice as paid\n"
         "• /cancel_invoice <code>[INV-NUMBER]</code> — Cancel/void an issued invoice\n"
         "• /clear — Clear active draft\n"
@@ -273,6 +293,133 @@ async def handle_history_command(message: Message):
 
         kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
         await message.answer(history_text, reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(Command("unpaid", "due", "pending"))
+async def handle_unpaid_command(message: Message):
+    with SessionLocal() as db:
+        org_id = _get_org_for_user(db, message.from_user)
+        invoices = get_invoice_history(db, org_id=org_id, timeframe="all", status="sent", limit=20)
+        if not invoices:
+            await message.answer("🎉 <b>គ្មានវិក្កយបត្រជំពាក់ទេ! / No unpaid invoices!</b>\nAll invoices are paid.", parse_mode="HTML")
+            return
+
+        unpaid_usd = sum((i.total for i in invoices if i.currency == "USD"), Decimal("0.00"))
+        unpaid_khr = sum((i.total for i in invoices if i.currency == "KHR"), Decimal("0"))
+
+        header_lines = [
+            f"<b>វិក្កយបត្រមិនទាន់បង់ / UNPAID INVOICES ({len(invoices)})</b>",
+            "──────────────────────────────",
+        ]
+        if unpaid_usd > 0:
+            header_lines.append(f"• Total Outstanding (USD): <b>${unpaid_usd:,.2f}</b>")
+        if unpaid_khr > 0:
+            header_lines.append(f"• Total Outstanding (KHR): <b>{unpaid_khr:,.0f} ៛</b>")
+        header_lines.append("──────────────────────────────\n")
+
+        lines = header_lines
+        for inv in invoices[:10]:
+            cust_name = inv.customer.name if inv.customer else "Unknown Customer"
+            symbol = "$" if inv.currency == "USD" else "៛"
+            due_str = f"Due: {inv.due_date}" if inv.due_date else "Due: Upon Receipt"
+            lines.append(
+                f"• <b>{inv.invoice_number}</b> — {cust_name}\n"
+                f"   Total: <b>{symbol}{inv.total:,.2f} {inv.currency}</b> | {due_str}\n"
+                f"   To mark paid: <code>/paid {inv.invoice_number}</code>\n"
+            )
+
+        buttons = []
+        for inv in invoices[:5]:
+            buttons.append([
+                InlineKeyboardButton(text=f"PDF #{inv.invoice_number}", callback_data=f"dl_pdf:{inv.invoice_number}"),
+                InlineKeyboardButton(text="Mark Paid", callback_data=f"mark_paid:{inv.id}"),
+            ])
+
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None
+        await message.answer("\n".join(lines), reply_markup=kb, parse_mode="HTML")
+
+
+@router.message(Command("export", "report", "csv"))
+async def handle_export_command(message: Message):
+    text = message.text.strip()
+    parts = text.split()
+    timeframe = parts[1].lower() if len(parts) > 1 else "all"
+    if timeframe not in ["today", "this_week", "this_month", "all"]:
+        timeframe = "all"
+
+    with SessionLocal() as db:
+        org_id = _get_org_for_user(db, message.from_user)
+        invoices = get_invoice_history(db, org_id=org_id, timeframe=timeframe, limit=5000)
+        if not invoices:
+            await message.answer(f"No invoices found to export for timeframe '{timeframe}'.")
+            return
+
+        try:
+            rate_info = resolve_exchange_rate()
+        except Exception:
+            rate_info = None
+
+        csv_text = export_invoices_to_csv(invoices, exchange_rate_result=rate_info)
+        csv_bytes = csv_text.encode("utf-8-sig")
+        filename = f"InvoiceMate_Sales_Journal_{timeframe}.csv"
+
+        doc = BufferedInputFile(csv_bytes, filename=filename)
+        await message.answer_document(
+            document=doc,
+            caption=(
+                f"📊 <b>របាយការណ៍លក់ / Sales Journal Export ({timeframe.upper()})</b>\n"
+                f"• Invoices exported: <b>{len(invoices)}</b>\n"
+                f"• Format: GDT Cambodian Fiscal Compliant CSV"
+            ),
+            parse_mode="HTML",
+        )
+
+
+@router.message(Command("customer", "client"))
+async def handle_customer_command(message: Message):
+    text = message.text.strip()
+    parts = text.split(maxsplit=1)
+    if len(parts) < 2:
+        await message.answer("Usage: <code>/customer [NAME]</code> (e.g. <code>/customer Sokha</code>)", parse_mode="HTML")
+        return
+
+    query = parts[1].strip()
+    with SessionLocal() as db:
+        org_id = _get_org_for_user(db, message.from_user)
+        customers = find_customers_by_name(db, org_id=org_id, name_query=query)
+
+        if not customers:
+            await message.answer(f"No customer found matching '{query}'.")
+            return
+
+        target = customers[0]
+        metrics = get_customer_metrics(db, customer_id=target.id, org_id=org_id)
+        cust_invoices = get_customer_invoices(db, customer_id=target.id, org_id=org_id, limit=5)
+
+        lines = [
+            "👤 <b>ព័ត៌មានអតិថិជន / CUSTOMER PROFILE</b>",
+            "──────────────────────────────",
+            f"• <b>Name:</b> {target.name}",
+            f"• <b>Phone:</b> {target.phone or 'N/A'}",
+            f"• <b>Default Currency:</b> {target.default_currency}",
+            f"• <b>Total Invoices:</b> {metrics['total_invoices']} (Paid: {metrics['paid_count']}, Unpaid: {metrics['sent_count']})",
+        ]
+        paid_map = metrics.get("total_paid_by_currency", {})
+        if paid_map:
+            for c, amt in paid_map.items():
+                sym = "$" if c == "USD" else "៛"
+                lines.append(f"• <b>Lifetime Paid ({c}):</b> {sym}{amt:,.2f}")
+
+        if cust_invoices:
+            lines.append("\n<b>Recent Invoices:</b>")
+            for inv in cust_invoices:
+                sym = "$" if inv.currency == "USD" else "៛"
+                lines.append(f"  • {inv.invoice_number}: {sym}{inv.total:,.2f} [{inv.status.upper()}]")
+
+        if len(customers) > 1:
+            lines.append(f"\n<i>Other matches: {', '.join([c.name for c in customers[1:4]])}</i>")
+
+        await message.answer("\n".join(lines), parse_mode="HTML")
 
 
 @router.message(Command("pdf", "download", "get_pdf"))

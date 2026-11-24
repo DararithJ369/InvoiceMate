@@ -240,4 +240,85 @@ async def test_bot_search_and_cancel_invoice_commands(db_session, monkeypatch):
     assert "already cancelled" in msg.answer.call_args[0][0]
 
 
+@pytest.mark.anyio
+async def test_bot_unpaid_and_export_and_customer_commands(db_session, monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+    from invoicemate.bot.handlers import handle_unpaid_command, handle_export_command, handle_customer_command
+    from invoicemate.services.org_service import create_org
+
+    org = create_org(db_session, telegram_user_id="tg_unpaid_export_user")
+    cust = Customer(org_id=org.id, name="Angkor Handicrafts", phone="+85588776655", default_currency="USD")
+    db_session.add(cust)
+    db_session.flush()
+
+    inv = Invoice(
+        org_id=org.id,
+        invoice_number="INV-008888",
+        customer_id=cust.id,
+        subtotal=Decimal("200.00"),
+        tax=Decimal("0.00"),
+        total=Decimal("200.00"),
+        currency="USD",
+        status=InvoiceStatus.SENT.value,
+        items=[InvoiceItem(product_name="Silver Bracelet", quantity=Decimal("2"), unit_price=Decimal("100.00"), line_total=Decimal("200.00"))],
+    )
+    db_session.add(inv)
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    monkeypatch.setattr("invoicemate.bot.handlers.SessionLocal", SessionContext)
+
+    msg = AsyncMock()
+    msg.from_user = MagicMock()
+    msg.from_user.id = "tg_unpaid_export_user"
+    msg.from_user.full_name = "Craft Merchant"
+    msg.from_user.username = "craftmerchant"
+
+    # 1. Test /unpaid command with pending invoice
+    msg.text = "/unpaid"
+    await handle_unpaid_command(msg)
+    msg.answer.assert_called_once()
+    unpaid_reply = msg.answer.call_args[0][0]
+    assert "UNPAID INVOICES" in unpaid_reply
+    assert "INV-008888" in unpaid_reply
+    assert "$200.00" in unpaid_reply
+
+    # 2. Test /export command
+    msg.reset_mock()
+    msg.text = "/export all"
+    await handle_export_command(msg)
+    msg.answer_document.assert_called_once()
+    doc_call = msg.answer_document.call_args[1]
+    assert "document" in doc_call
+    assert "Sales Journal Export" in doc_call["caption"]
+
+    # 3. Test /customer usage without argument
+    msg.reset_mock()
+    msg.text = "/customer"
+    await handle_customer_command(msg)
+    assert "Usage:" in msg.answer.call_args[0][0]
+
+    # 4. Test /customer lookup with query
+    msg.reset_mock()
+    msg.text = "/customer Angkor"
+    await handle_customer_command(msg)
+    msg.answer.assert_called_once()
+    cust_reply = msg.answer.call_args[0][0]
+    assert "CUSTOMER PROFILE" in cust_reply
+    assert "Angkor Handicrafts" in cust_reply
+    assert "INV-008888" in cust_reply
+
+    # 5. Test /customer non-existent
+    msg.reset_mock()
+    msg.text = "/customer NonExistentCustomer"
+    await handle_customer_command(msg)
+    assert "No customer found" in msg.answer.call_args[0][0]
+
+
+
 
