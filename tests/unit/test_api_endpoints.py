@@ -235,6 +235,43 @@ def test_customers_api_endpoints(api_client, db_session):
     res_404 = api_client.get(f"/api/customers/999999?org_id={org.id}")
     assert res_404.status_code == 404
 
+    # Update customer PUT /api/customers/{id}
+    res_update = api_client.put(
+        f"/api/customers/{c1.id}?org_id={org.id}",
+        json={"name": "Sokha Retail HQ", "phone": "+85599888777", "default_currency": "USD"},
+    )
+    assert res_update.status_code == 200
+    assert res_update.json()["name"] == "Sokha Retail HQ"
+    assert res_update.json()["phone"] == "+85599888777"
+
+    # Add an invoice for c1 and test customer invoices & stats endpoints
+    inv_c1 = Invoice(
+        org_id=org.id,
+        invoice_number="INV-007799",
+        customer_id=c1.id,
+        subtotal=Decimal("400.00"),
+        tax=Decimal("0.00"),
+        total=Decimal("400.00"),
+        currency="USD",
+        status=InvoiceStatus.PAID.value,
+        items=[],
+    )
+    db_session.add(inv_c1)
+    db_session.commit()
+
+    res_cust_invs = api_client.get(f"/api/customers/{c1.id}/invoices?org_id={org.id}")
+    assert res_cust_invs.status_code == 200
+    assert len(res_cust_invs.json()) == 1
+    assert res_cust_invs.json()[0]["invoice_number"] == "INV-007799"
+
+    res_cust_stats = api_client.get(f"/api/customers/{c1.id}/stats?org_id={org.id}")
+    assert res_cust_stats.status_code == 200
+    stats_data = res_cust_stats.json()
+    assert stats_data["customer_name"] == "Sokha Retail HQ"
+    assert stats_data["total_invoices"] == 1
+    assert stats_data["paid_count"] == 1
+    assert stats_data["total_paid_by_currency"]["USD"] == 400.00
+
 
 def test_invoice_actions_api(api_client, db_session):
     org = create_org(db_session, telegram_user_id="tg_action_api_user")
